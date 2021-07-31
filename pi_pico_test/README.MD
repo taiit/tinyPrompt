@@ -4,6 +4,16 @@ mkdir build
 cd build
 then run
 
+Linux
+
+cmake ../
+
+Window
+
+cmake -G"MinGW Makefiles" ../
+
+or Window Eclipse
+
 cmake -G "Eclipse CDT4 - MinGW Makefiles" -DCMAKE_BUILD_TYPE=Debug -DCMAKE_ECLIPSE_GENERATE_SOURCE_PROJECT=TRUE -DCMAKE_ECLIPSE_MAKE_ARGUMENTS=-j3 \
 -D"CMAKE_MAKE_PROGRAM:PATH=D:/workspace/mingw32_env/bin/mingw32-make.exe" \
 -D"CMAKE_CXX_COMPILER:PATH=C:/GNU_Arm_Embedded_Toolchain/10_2020-q4-major/bin/arm-none-eabi-g++.exe" \
