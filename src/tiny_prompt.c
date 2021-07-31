@@ -1,3 +1,10 @@
+/**
+ * @file tiny_prompt.c
+ * @date 31 July 2021
+ * @authors vohuutai27@gmail.com
+ *
+ * @brief implement tiny prompt
+ */
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -6,14 +13,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <termios.h>
+//#include <termios.h> // pico no this
 #include <unistd.h>
 #include <ctype.h>
 #include "tiny_prompt.h"
 #include "ascii_code.h"
 #include "debug.h"
 
-#define CMD_CHARACTER_MAX   256
+#define CMD_CHARACTER_MAX   32
 #define CMD_HISTORY_MAX     8
 
 enum {
@@ -31,9 +38,17 @@ enum {
     LEFT,
     RIGHT
 };
-
+#if defined(ardunio)
 static const uint8_t STR_TINY_PROMPT[] = "Tiny $ ";
-static const uint8_t STR_TINY_PROMPT_WELCOME[] = "\nWelcome tiny prompt!\n";
+#elif defined(Linux)
+static const uint8_t STR_TINY_PROMPT[] = "Tiny $ ";
+#elif defined(PI_PICO)
+static const uint8_t STR_TINY_PROMPT[] = "\nTiny $ ";
+#else
+#error "Unknown board"
+#endif
+
+static const uint8_t STR_TINY_PROMPT_WELCOME[] = "\n\nWelcome tiny prompt!\n";
 
 uint8_t cmd_history[CMD_HISTORY_MAX][CMD_CHARACTER_MAX];
 uint8_t cmd_buf[CMD_CHARACTER_MAX];
@@ -46,14 +61,20 @@ tinyP_serial_t tp_serial;
 /**
  * Private function, send a string via serial with string length.
  */
-void send_nstr(const uint8_t* str, size_t str_len) {
-#ifdef ardunio
-#else
-    size_t wlen = write(tp_serial, str, str_len);
+void send_nstr(const uint8_t* str, int str_len) {
+#if defined(ardunio)
+#elif defined(Linux)
+    size_t wlen = write(tp_serial, str, str_len); // can convert it to fwrite
     if( wlen != str_len ) {
         debug_print("Error from write: %d, %d\n", (int)wlen, errno);
     }
     tcdrain(tp_serial); /* delay for output */
+#elif defined(PI_PICO)
+    for(int i = 0; i < str_len; i++) {
+        putchar(str[i]);
+    }
+#else
+#error "Unknown board"
 #endif
 }
 
@@ -66,47 +87,27 @@ void send_str(const uint8_t* str) {
 }
 
 
-void function_a(void) {
-    debug_print("Function A\n");
-}
-void function_b(void) { debug_print("Function B\n"); }
-void function_c(void) { debug_print("Function C\n"); }
-void function_d(void) { debug_print("Function D\n"); }
-void function_e(void) { debug_print("Function E\n"); }
 
-const static struct {
-  const char *name;
-  void (*func)(void);
-} function_map [] = {
-  { "function_a", function_a },
-  { "function_b", function_b },
-  { "function_c", function_c },
-  { "function_d", function_d },
-  { "function_e", function_e },
-};
+extern function_map_t function_map [];
+size_t total_func_num;
 
 int call_function(const char *name) {
-    int i;
-    
-    for (i = 0; i < (sizeof(function_map) / sizeof(function_map[0])); i++) {
+    for (size_t i = 0; i < total_func_num; i++) {
         if( !strcmp(function_map[i].name, name) && function_map[i].func ) {
+            send_str("\n");
             function_map[i].func();
-            send_str((const uint8_t*) "function was called \n");
             return 1;
         }
     }
     debug_print("%s not found \n", name);
-    send_str((const uint8_t*) "function not found \n");
+    send_str("\n"); send_str(name); send_str(" not found");
     return 0;
 }
 
-//
-// tiny prompt session
-//
 
 /**
  * Private function, insert @data into @buf at @pos and update @buf_len
- * @return
+ * @return true if insert data success
  */
 bool insert_data(uint8_t buf[], size_t *buf_len, size_t pos, uint8_t data) {
     if (pos >= 0 && pos <= *buf_len) {
@@ -218,16 +219,20 @@ void handling_up_down_history(int directon) {
         send_str((const uint8_t*)cmd_buf);
 }
 
-void save_character(const uint8_t* character) {
-    send_nstr(character, 1); // send back received data
-    if( insert_data(cmd_buf, (size_t*)(&cmd_char_cnt), (size_t)cmd_cursor_index, *character) ) {
-        memcpy(cmd_history[0], cmd_buf, (strlen((const char*) cmd_buf) + 1) * sizeof(uint8_t));
-        cmd_cursor_index++;
-        if( cmd_cursor_index < cmd_char_cnt ) {
-            send_str((const uint8_t*) (&cmd_buf[cmd_cursor_index]));
-        }
-        for (int idx = cmd_cursor_index; idx < cmd_char_cnt; idx++) {
-            send_str((const uint8_t*) "\x1b[1D"); // Moves the cursor backward
+void save_visible_character(const uint8_t chr) {
+    //send_nstr(character, 1); // send back received data
+
+    if ( isprint(chr) ) { // isprint from ctype.h
+        send_nstr(&chr, 1);
+        if( insert_data(cmd_buf, (size_t*)(&cmd_char_cnt), (size_t)cmd_cursor_index, chr) ) {
+            memcpy(cmd_history[0], cmd_buf, (strlen((const char*) cmd_buf) + 1) * sizeof(uint8_t));
+            cmd_cursor_index++;
+            if( cmd_cursor_index < cmd_char_cnt ) {
+                send_str((const uint8_t*) (&cmd_buf[cmd_cursor_index]));
+            }
+            for (int idx = cmd_cursor_index; idx < cmd_char_cnt; idx++) {
+                send_str((const uint8_t*) "\x1b[1D"); // Moves the cursor backward
+            }
         }
     }
 }
@@ -253,7 +258,7 @@ void handle_enter_key() {
 }
 
 
-void tiny_prompt_init(tinyP_serial_t serial) {
+void tiny_prompt_init(tinyP_serial_t serial, size_t func_num) {
     tp_serial = serial;
     memset(cmd_buf, 0, sizeof(cmd_buf));
     // clean-up history
@@ -262,22 +267,22 @@ void tiny_prompt_init(tinyP_serial_t serial) {
     }
     send_str(STR_TINY_PROMPT_WELCOME);
     send_str(STR_TINY_PROMPT);
+    total_func_num = func_num;
 }
 
 /**
  *
  * @param serial_char_data
  */
-void tiny_prompt_execute(const uint8_t* serial_char_data) {
+void tiny_prompt_execute(const uint8_t serial_char_data) {
+    char is_debug = 1;
 
-    debug_print("\n---------------------------------------------------------------------\n");
-    debug_print("Read character: [ 0x%x - %s ] \n", (unsigned int)*serial_char_data, isprint(*serial_char_data) ? (char*)serial_char_data : (char*)" ");
-    switch(*serial_char_data) {
+    switch(serial_char_data) {
         case ASCII_CODE_BS:     // 0x08 (backspace).
             remove_data(1, 1);
             break;
         case ASCII_CODE_CR: // 0x0D (enter).
-            send_str(serial_char_data);
+            send_nstr(&serial_char_data, 1);
             handle_enter_key();
             break;
         case ASCII_CODE_ESC: // 0x1b
@@ -291,13 +296,15 @@ void tiny_prompt_execute(const uint8_t* serial_char_data) {
              */
             debug_print("*Specical esc key\n");
             key_state = ESC_KEY_STATE;
+            is_debug = 0;
             break;
         case 0x5b:
             if (ESC_KEY_STATE == key_state) {
                 key_state = NIGA_KEY_STATE;
             } else {
-                save_character(serial_char_data);
+                save_visible_character(serial_char_data);
             }
+            is_debug = 0;
             break;
         case 0x31: // check HOME key
         case 0x33: // check DEL key
@@ -306,40 +313,40 @@ void tiny_prompt_execute(const uint8_t* serial_char_data) {
         case 0x43: // right
         case 0x44: // left
             if (NIGA_KEY_STATE == key_state) {
-                if( *serial_char_data == 0x41 ) {
+                if( serial_char_data == 0x41 ) {
                     handling_up_down_history(UP);
                     key_state = NONE_KEY_STATE;
-                } else if( *serial_char_data == 0x42 ) {
+                } else if( serial_char_data == 0x42 ) {
                     handling_up_down_history(DOWN);
                     key_state = NONE_KEY_STATE;
-                } else if( *serial_char_data == 0x43 ) {
+                } else if( serial_char_data == 0x43 ) {
                     debug_print("RIGHT\n");
                     if (cmd_cursor_index < cmd_char_cnt) {
                         send_str((const uint8_t*) "\x1b[1C"); // cursor forward
                         cmd_cursor_index++;
                     }
                     key_state = NONE_KEY_STATE;
-                } else if( *serial_char_data == 0x44 ) {
+                } else if( serial_char_data == 0x44 ) {
                     debug_print("LEFT\n");
                     if(cmd_cursor_index > 0) {
                         send_str((const uint8_t*) "\x1b[1D"); // cursor backward
                         cmd_cursor_index--;
                     }
                     key_state = NONE_KEY_STATE;
-                } else if (*serial_char_data == 0x33) { // check DEL
+                } else if ( serial_char_data == 0x33 ) { // check DEL
                    key_state = DEL_KEY_STATE;
-                } else if (*serial_char_data == 0x31) { // check HOME
+                } else if ( serial_char_data == 0x31 ) { // check HOME
                    key_state = HOME_KEY_STATE;
                 }
             } else {
-                save_character(serial_char_data);
+                save_visible_character(serial_char_data);
             }
             break;
         case 0x4f:
             if (ESC_KEY_STATE == key_state) {
                 key_state = END_KEY_STATE;
             } else {
-                save_character(serial_char_data);
+                save_visible_character(serial_char_data);
             }
             break;
         case 0x46:
@@ -350,7 +357,7 @@ void tiny_prompt_execute(const uint8_t* serial_char_data) {
                 }
                 key_state = NONE_KEY_STATE;
             } else {
-                save_character(serial_char_data);
+                save_visible_character(serial_char_data);
             }
             break;
         case 0x7e:
@@ -365,30 +372,38 @@ void tiny_prompt_execute(const uint8_t* serial_char_data) {
                 }
                 key_state = NONE_KEY_STATE;
             } else {
-                save_character(serial_char_data);
+                save_visible_character(serial_char_data);
             }
             break;
         default:
-            save_character(serial_char_data);
+            save_visible_character(serial_char_data);
             break;
     }// end switch
-    debug_print("cursor_index: %d, char_cnt: %d, history_idx: %d, history_query_idx: %d\n",
-            cmd_cursor_index, cmd_char_cnt, cmd_history_idx, cmd_history_query_idx);
-    if (cmd_char_cnt > 0) {
-        for(int idx = 0; idx < cmd_char_cnt; idx++) {
-            if(idx == cmd_cursor_index) {
-                debug_print("\x1b[4m%c\033[0m", cmd_buf[idx]); // print under line charactor
-            } else {
-                debug_print("%c", cmd_buf[idx]);
+
+// Debug session
+    if(is_debug) {
+        debug_print("---------------------------------------------------------------------");
+        debug_print("Input character: [ 0x%x - %c ]",
+                (unsigned int)serial_char_data, isprint(serial_char_data) ? serial_char_data : (char*)" ");
+
+        debug_print("cursor_index: %d, char_cnt: %d, history_idx: %d, history_query_idx: %d",
+                cmd_cursor_index, cmd_char_cnt, cmd_history_idx, cmd_history_query_idx);
+        if (cmd_char_cnt > 0) {
+            for(int idx = 0; idx < cmd_char_cnt; idx++) {
+                if(idx == cmd_cursor_index) {
+                    debug_print("\t\x1b[4m%c\033[0m", cmd_buf[idx]); // print under line charactor
+                } else {
+                    debug_print("\t%c", cmd_buf[idx]);
+                }
+            }
+            if (cmd_cursor_index == cmd_char_cnt) {
+                debug_print("\t_");
             }
         }
-        if (cmd_cursor_index == cmd_char_cnt) {
-            debug_print("_");
+        debug_print("History");
+        for(int i = 0; i < CMD_HISTORY_MAX; i++) {
+            debug_print("\thistory[%d]: %s", i, cmd_history[i]);
         }
+        debug_print("---------------------------------------------------------------------\n");
     }
-    debug_print("History\n");
-    for(int i = 0; i < CMD_HISTORY_MAX; i++) {
-        debug_print("\thistory[%d]: %s \n", i, cmd_history[i]);
-    }
-    debug_print("\n---------------------------------------------------------------------\n");
 }

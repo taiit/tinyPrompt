@@ -1,3 +1,11 @@
+/**
+ * @file ascii_code.h
+ * @date 31 July 2021
+ * @authors vohuutai27@gmail.com
+ *
+ * @brief define ascii code
+ */
+
 #ifndef __ASCII_CODE_H__
 #define __ASCII_CODE_H__
 
